@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+*.env
+data/
+artifacts/
+mlruns/
+*.png
+*.joblib
+*.pkl
+.ipynb_checkpoints/
