@@ -3,7 +3,7 @@ import { TrendingDown } from "lucide-react";
 import { ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Bar } from "recharts";
 
 // Use the real backend:
-const API_URL = "http://127.0.0.1:8000/api/score";
+const API_URL = import.meta.env.VITE_API_URL || "/api/score";
 
 type Form = {
   loan_amnt?: number;
