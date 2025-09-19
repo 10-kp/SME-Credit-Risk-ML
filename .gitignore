@@ -15,9 +15,6 @@ api/__pycache__/
 api/.pytest_cache/
 api/*.sqlite*
 
-# model artifacts
-api/models/*
-!api/models/.gitkeep
 
 # notebooks & exports
 *.ipynb
