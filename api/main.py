@@ -1,31 +1,34 @@
+# ---------- imports ----------
 from fastapi import FastAPI
-from pydantic import BaseModel, ConfigDict
 from fastapi.middleware.cors import CORSMiddleware
-import os, math, re
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict
 from typing import Union, Optional
+import os, math, re
 import numpy as np, pandas as pd
 
+# ---------- FastAPI app + CORS ----------
 app = FastAPI(title="SME Risk Scoring API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173","http://127.0.0.1:5173"],
-    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-@app.get("/")
-def root():
-    return {"status": "ok", "docs": "/docs", "score_endpoint": "POST /api/score"}
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JOBLIB_PATH = os.path.join(BASE_DIR, "models", "model.joblib")
-TXT_PATH    = os.path.join(BASE_DIR, "models", "model.txt")
+# ---------- model loading ----------
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+JOBLIB_PATH = os.path.join(MODELS_DIR, "model.joblib")
+TXT_PATH    = os.path.join(MODELS_DIR, "model.txt")
 
 USE_REAL = False
 BOOSTER = None
 EXPECTED = []
 EXPLAINER = None
 
-# --- load LightGBM model (joblib or text) ---
 try:
     if os.path.exists(JOBLIB_PATH):
         import joblib, lightgbm as lgb
@@ -56,7 +59,7 @@ if USE_REAL and BOOSTER is not None:
     except Exception as e:
         print(f"[startup] SHAP unavailable ({e}). Will use global importances.")
 
-# ---- tolerant schema ----
+# ---------- schema (Pydantic v2) ----------
 class ScoreIn(BaseModel):
     loan_amnt:   Union[float, str] | None = None
     int_rate:    Union[float, str] | None = None
@@ -67,8 +70,6 @@ class ScoreIn(BaseModel):
     revol_util:  Union[float, str] | None = None
     delinq_2yrs: Union[int,  str]  | None = 0
     open_acc:    Union[int,  str]  | None = 0
-
-    # v2-style config: ignore extra fields
     model_config = ConfigDict(extra='ignore')
 
 def _fnum(x, default=0.0) -> float:
@@ -118,7 +119,7 @@ def build_row(obj) -> pd.DataFrame:
         if gcol in row: row[gcol] = 1.0
     return pd.DataFrame([row], columns=EXPECTED)
 
-# ---- single endpoint ----
+# ---------- /api/score ----------
 @app.post("/api/score")
 def score(p: ScoreIn):
     # normalize UI inputs
@@ -133,7 +134,6 @@ def score(p: ScoreIn):
     open_acc    = _fint(p.open_acc)
 
     if USE_REAL and BOOSTER is not None:
-        # build a normalized object for build_row()
         class _Q: pass
         q = _Q()
         q.loan_amnt = loan_amnt; q.int_rate = int_rate; q.dti = dti; q.annual_inc = annual_inc
@@ -144,9 +144,8 @@ def score(p: ScoreIn):
         y = BOOSTER.predict(X)
         pd_hat = float(np.clip(y[0], 0.0, 1.0))
 
-        # SHAP or global importances
         feats = []
-        if EXPLAINER is not None:
+        if 'EXPLAINER' in globals() and EXPLAINER is not None:
             shap_vals = EXPLAINER.shap_values(X)
             if isinstance(shap_vals, list): shap_vals = shap_vals[-1]
             sv = shap_vals[0]
@@ -159,7 +158,7 @@ def score(p: ScoreIn):
         feats.sort(key=lambda d: d["value"], reverse=True)
         return {"pd": pd_hat, "feats": feats[:7], "model_version": "real-lightgbm"}
 
-    # MOCK fallback (uses normalized numbers)
+    # MOCK fallback
     gmap = dict(A=0,B=1,C=2,D=3,E=4,F=5,G=6)
     w = dict(intercept=-2.0,int_rate=0.15,dti=0.04,annual_inc=-0.000002,
              term=0.2,grade=0.18,revol_util=0.01,delinq_2yrs=0.25,
@@ -183,3 +182,24 @@ def score(p: ScoreIn):
     ]
     feats.sort(key=lambda d: d["value"], reverse=True)
     return {"pd": pd_hat, "feats": feats[:7], "model_version": "demo-mock"}
+
+# ---------- SPA (serve built frontend if present) ----------
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+INDEX_HTML = os.path.join(STATIC_DIR, "index.html")
+
+if os.path.exists(INDEX_HTML):
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def spa_root():
+        return FileResponse(INDEX_HTML)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        return FileResponse(INDEX_HTML)
+else:
+    @app.get("/", include_in_schema=False)
+    def root():
+        return {"status": "ok", "docs": "/docs", "score_endpoint": "POST /api/score"}
