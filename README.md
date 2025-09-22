@@ -99,7 +99,8 @@ uvicorn main:app --host 127.0.0.1 --port 8000
 
 Open:
 
-UI → http://127.0.0.1:8000
+UI → http://127.0.0.1:8000;
+
 API docs → http://127.0.0.1:8000/docs
 
 
