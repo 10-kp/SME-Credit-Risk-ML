@@ -1,145 +1,148 @@
-# SME Credit Risk: Explainable ML Pipeline + Chat UI
+# SME Credit Risk — FastAPI + React (Single URL)
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![Node](https://img.shields.io/badge/Node.js-20.19%2B%20or%2022.12%2B-green.svg)](https://nodejs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-teal.svg)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-Vite%20%2B%20Tailwind-lightblue.svg)](https://vitejs.dev/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+A production-friendly app where **FastAPI** serves both the API and the built **React (Vite)** UI.  
+Predict SME loan default probability (LightGBM) and show top drivers.
 
 ---
 
-## 📌 About
-
-Explainable SME Credit Risk Scoring — **LightGBM + SHAP + MLflow + FastAPI**, bridging corporate banking expertise with AI.  
-
-This repository combines:
-- An **ML pipeline** to estimate SME loan default probability (PD).  
-- A **chat interface** (FastAPI + React) to interact with models and explanations in real time.  
+## Prerequisites
+- **Python** 3.11 or 3.12
+- **Node.js** 20.19+ (or 22.12+)
+- **Git** latest
 
 ---
 
-## 🏦 Why this project (Banking × AI)
+## Repository Layout
+api/
+main.py # FastAPI app (serves API + built UI)
+requirements.txt
+models/
+model.txt # LightGBM model (tracked in git for simple deploys)
+static/ # frontend build goes here (assets/ + index.html)
+frontend/
+src/ # React app (Vite + TS)
+package.json
+.github/workflows/ci.yml # CI builds API+UI on pushes
 
-- **Risk insight** → Estimate Probability of Default (PD) beyond static scorecards  
-- **Explainability** → SHAP highlights drivers (`int_rate`, `dti`, `grade`) for governance & client trust  
-- **Ops-ready** → MLflow model tracking; FastAPI endpoints for real-time scoring  
-
----
-
-## 📂 Repository Layout
-
-```
-SME-Credit-Risk-ML/
-├─ notebooks/ # CAAS.ipynb, experiments
-├─ api/
-│ └─ chat/ # FastAPI backend
-│ ├─ main.py
-│ ├─ llm.py
-│ ├─ requirements.txt
-│ └─ artifacts/ # export model.pkl, shap.pkl here
-├─ frontend/ # React + Tailwind chat UI
-│ ├─ src/ChatCaas.tsx
-│ ├─ src/main.tsx
-│ ├─ vite.config.ts
-│ └─ package.json
-└─ README.md
-```
 
 ---
 
-## 🔄 ML Pipeline (Core)
+## Quick Start (Local, Single URL)
 
-**Steps**
-1. Ingest: DuckDB (subset columns, cap rows)  
-2. Prep: cast text→category, CountEncoder for categoricals  
-3. Train: LightGBM (AUC baseline ~0.70)  
-4. Explain: SHAP summary plots  
-5. Track: MLflow (params, metrics, artifacts)  
-6. Serve: FastAPI `/score` endpoint  
+> Result: open **http://127.0.0.1:8000** and you’ll see the UI;  
+> API docs at **http://127.0.0.1:8000/docs**.
 
-**Quickstart**
+1) **Create venv & install API deps**
 ```powershell
+cd api
 python -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
-
 pip install -r requirements.txt
-jupyter notebook notebooks/CAAS.ipynb
-```
-
----
-💬 Chat App (FastAPI + React)
-
-Interactive chat interface with SSE streaming.
-
-Backend: FastAPI (api/chat/)
-
-Frontend: React + Vite + Tailwind (frontend/)
-
-Modes: Echo fallback (no API key) or OpenAI integration
 
 
-Backend
-```powershell
-cd SME-Credit-Risk-ML
-.\.venv\Scripts\Activate.ps1
-pip install -r api\chat\requirements.txt
-uvicorn api.chat.main:app --reload
-```
+###2. Build the frontend and place it under api/static/
 
-Check health: http://127.0.0.1:8000/api/health
-
-
-Frontend
-cd frontend
-
+cd ..\frontend
+# (ensure no dev override so the UI uses same-origin API)
+del .env.local 2>$null
 npm install
+npm run build
+Copy-Item -Recurse -Force .\dist\* ..\api\static\
 
+
+###3. Run the server
+
+cd ..\api
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+###4. Open
+
+UI: http://127.0.0.1:8000
+
+API docs: http://127.0.0.1:8000/docs
+
+---
+
+##Dev Mode (Two Terminals, Live Reload)
+
+###Terminal A — API
+
+cd api
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+
+
+###Terminal B — Frontend
+cd frontend
+# point the UI at the local API:
+echo VITE_API_URL=http://127.0.0.1:8000/api/score > .env.local
+npm install
 npm run dev
-
-
-Open http://localhost:5173
-
----
-
-📊 Using the CAAS Model with Chat
-
-
-From notebook after training:
-
-```powershell
-import os, joblib
-os.makedirs("../api/chat/artifacts", exist_ok=True)
-joblib.dump(lgbm_model, "../api/chat/artifacts/model.pkl")
-joblib.dump(shap_explainer, "../api/chat/artifacts/shap.pkl")
-```
-
-Then extend backend with:
-
-POST /api/score → returns PD/probabilities
-
-POST /api/explain → returns top SHAP drivers
+# open http://localhost:5173
 
 
 ---
 
-🛠️ Troubleshooting
+Deploy (Render/Railway — Single URL)
 
-PowerShell blocks venv activation
+Root directory: api
 
-```powershell
+Build: pip install -r requirements.txt
+
+Start: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+Because the React build is copied into api/static/ and model.txt is present in api/models/, your single service will serve both UI and API from one URL.
+
+⚠️ If your repo is public and the model is sensitive, remove it from git and download it at startup instead.
+
+
+---
+
+##Endpoints
+
+POST /api/score → { pd: number, feats: [ {name, value} ], model_version }
+
+/docs → OpenAPI UI
+
+/health → { "ok": true } (if enabled)
+
+/ → built React app (after you copy frontend/dist into api/static/)
+
+
+---
+
+##Configuration (Frontend → API URL)
+
+In frontend/src/App.tsx the API URL is:
+
+// uses env var in dev; falls back to same-origin in prod
+const API_URL = import.meta.env.VITE_API_URL || "/api/score";
+
+
+Dev: create frontend/.env.local with
+VITE_API_URL=http://127.0.0.1:8000/api/score
+
+Prod (single URL): no env needed; UI uses "/api/score" on the same host.
+
+
+---
+
+Troubleshooting
+
+Cannot activate venv (PowerShell):
+
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
-```
 
-Uvicorn import error → run from repo root
 
-```powershell
-uvicorn api.chat.main:app --reload
-```
+“Connection refused” to /docs: make sure Uvicorn is running and you didn’t close that terminal.
 
-Node.js version too low → upgrade via nvm
+Node version warning (Vite): upgrade Node to 20.19+ (or 22.12+).
 
-```powershell
-nvm install 22.12.0 && nvm use 22.12.0
-```
+CORS errors (only when split-hosting): add your frontend origin in main.py:
+
+allow_origins=["http://localhost:5173","http://127.0.0.1:5173","https://YOUR-UI-DOMAIN"]
+
+
+
