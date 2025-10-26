@@ -1,392 +1,134 @@
-import React, { useMemo, useState } from "react";
-import { TrendingDown } from "lucide-react";
-import { ResponsiveContainer, BarChart, XAxis, YAxis, Tooltip, Bar } from "recharts";
+import React, { useState } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { login, score } from "./api";
+import ResultsCard from "./ResultsCard";
 
-// Use the real backend:
-const API_URL = import.meta.env.VITE_API_URL || "/api/score";
+import { ScoreResponse } from "./types";
 
-type Form = {
-  loan_amnt?: number;
-  int_rate?: number;
-  dti?: number;
-  annual_inc?: number;
-  term?: number;          // 36 or 60
-  grade?: "A"|"B"|"C"|"D"|"E"|"F"|"G";
-  revol_util?: number;
-  delinq_2yrs?: number;
-  open_acc?: number;
-};
 
-type Result = {
-  pd: number;
-  feats: { name: string; value: number }[];
-  model_version?: string;
-};
-
-function sigmoid(x:number){ return 1/(1+Math.exp(-x)); }
-
-// Lightweight mock model so the app works instantly (replace with API when ready)
-function mockScore(payload: Form): Result {
-  const w: any = {
-    intercept: -2.0,
-    int_rate: 0.15,
-    dti: 0.04,
-    annual_inc: -0.000002,
-    term: 0.2, // 60 months riskier
-    grade: 0.18, // worse grade → higher risk
-    revol_util: 0.01,
-    delinq_2yrs: 0.25,
-    open_acc: -0.02,
-    loan_amnt: 0.000002,
-  };
-  const gradeMap: any = { A:0, B:1, C:2, D:3, E:4, F:5, G:6 };
-  const x =
-    w.intercept +
-    w.int_rate * (payload.int_rate || 0) +
-    w.dti * (payload.dti || 0) +
-    w.annual_inc * (payload.annual_inc || 0) +
-    w.term * ((payload.term || 36) === 60 ? 1 : 0) +
-    w.grade * gradeMap[payload.grade || "B"] +
-    w.revol_util * (payload.revol_util || 0) +
-    w.delinq_2yrs * (payload.delinq_2yrs || 0) +
-    w.open_acc * (payload.open_acc || 0) +
-    w.loan_amnt * (payload.loan_amnt || 0);
-
-  const pd = sigmoid(x);
-
-  const featsRaw = [
-    { name: "Interest rate (%)", value: Math.abs(w.int_rate * (payload.int_rate || 0)) },
-    { name: "Debt-to-income (%)", value: Math.abs(w.dti * (payload.dti || 0)) },
-    { name: "Term (60m flag)", value: Math.abs(w.term * ((payload.term || 36) === 60 ? 1 : 0)) },
-    { name: "Grade (A→G)", value: Math.abs(w.grade * gradeMap[payload.grade || "B"]) },
-    { name: "Revolving util (%)", value: Math.abs(w.revol_util * (payload.revol_util || 0)) },
-    { name: "Annual income (AED)", value: Math.abs(w.annual_inc * (payload.annual_inc || 0)) },
-    { name: "Delinq in 2 yrs", value: Math.abs(w.delinq_2yrs * (payload.delinq_2yrs || 0)) },
-    { name: "Open accounts", value: Math.abs(w.open_acc * (payload.open_acc || 0)) },
-    { name: "Loan amount (AED)", value: Math.abs(w.loan_amnt * (payload.loan_amnt || 0)) },
-  ].sort((a, b) => b.value - a.value);
-
-  return { pd, feats: featsRaw.slice(0, 7), model_version: "demo-0.1" };
-}
-
-function PricingHint({ pd }: { pd: number }) {
-  const base = 6.0; // AED interbank proxy (illustrative)
-  const spread = pd < 0.03 ? 3 : pd < 0.07 ? 4.5 : pd < 0.12 ? 6.5 : pd < 0.20 ? 9 : 12;
-  const rate = (base + spread).toFixed(1);
-  const text =
-    pd < 0.07
-      ? "Prime clients / low expected loss"
-      : pd < 0.12
-      ? "Standard book with controls"
-      : pd < 0.20
-      ? "Heightened monitoring"
-      : "Consider collateral / covenants";
-  return (
-    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-      <TrendingDown size={18} style={{ marginTop: 2 }} />
-      <div>
-        <div style={{ fontSize: 14 }}>
-          Suggested all-in rate (illustrative): <strong>{rate}%</strong>
-        </div>
-        <div style={{ fontSize: 12, color: "#666" }}>
-          {text}. Calibrate with RAROC and pricing committee.
-        </div>
-      </div>
-    </div>
-  );
-}
+const FormSchema = z.object({
+  revenue: z.number({ invalid_type_error: "Required" }).min(0, "Must be >= 0"),
+  ebitda: z.number({ invalid_type_error: "Required" }),
+  dscr: z.number({ invalid_type_error: "Required" }).min(0, "Must be >= 0"),
+  leverage: z.number({ invalid_type_error: "Required" }).min(0, "Must be >= 0"),
+  bank_limits: z.number({ invalid_type_error: "Required" }).min(0, "Must be >= 0"),
+  tenor_months: z.number({ invalid_type_error: "Required" }).int().min(1).max(120),
+  sector: z.enum(["manufacturing","services","trading","construction","hospitality","logistics","agri"]),
+});
+type FormValues = z.infer<typeof FormSchema>;
 
 export default function App() {
-  const [form, setForm] = useState<Form>({ term: 36, grade: "B" });
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ScoreResponse | null>(null);
+  const { register, handleSubmit, formState:{errors}, reset } = useForm<FormValues>({
+    resolver: zodResolver(FormSchema),
+    defaultValues: {
+      revenue: 12000000,
+      ebitda: 1800000,
+      dscr: 1.8,
+      leverage: 2.5,
+      bank_limits: 5000000,
+      tenor_months: 24,
+      sector: "manufacturing",
+    }
+  });
 
-  const risk = useMemo(() => {
-    if (!result) return null;
-    const p = result.pd;
-    if (p < 0.03) return { label: "A (Low)", color: "#22c55e" };
-    if (p < 0.07) return { label: "B (Mod-Low)", color: "#84cc16" };
-    if (p < 0.12) return { label: "C (Moderate)", color: "#eab308" };
-    if (p < 0.20) return { label: "D (High)", color: "#f97316" };
-    return { label: "E (Very High)", color: "#ef4444" };
-  }, [result]);
+  const onSubmit = async (values: FormValues) => {
+  try {
+    // if not signed in, use the demo endpoint automatically
+    const useDemo = !localStorage.getItem("token");
+    const data = await score(values, { demo: useDemo });
+    setResult(data);
+  } catch (e: any) {
+    console.error("score error", e);
+    if (String(e).includes("429")) alert("Too many requests. Please wait a minute.");
+    else if (String(e).includes("401")) alert("Not signed in. Click ‘Sign in’ first, or use Quick demo.");
+    else alert("Scoring failed. Check DevTools > Network for details.");
+  }
+};
 
-  const featureData = useMemo(
-    () => (result ? result.feats.map((f) => ({ name: f.name, value: Number(f.value.toFixed(4)) })) : []),
-    [result]
+  const trySample = async () => {
+    const sample: FormValues = {
+      revenue: 12000000, ebitda: 1800000, dscr: 1.8, leverage: 2.5,
+      bank_limits: 5000000, tenor_months: 24, sector: "manufacturing"
+    };
+    reset(sample);
+    const data = await score(sample);
+    setResult(data);
+  };
+
+  const field = (name: keyof FormValues, label: string, step="any") => (
+    <div style={{ marginBottom: 10 }}>
+      <label style={{ display: "block", fontWeight: 600 }}>{label}</label>
+      <input type="number" step={step} style={{ width:"100%", padding:8, border:"1px solid #e5e7eb", borderRadius:8 }}
+        {...register(name, { valueAsNumber: true })} />
+      {errors[name] && <div style={{ color:"#b91c1c", fontSize:12 }}>{String(errors[name]?.message || "Invalid")}</div>}
+    </div>
   );
 
-  async function onScore() {
-    setError(null);
-    setLoading(true);
-    try {
-      if (API_URL) {
-        const resp = await fetch(API_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-        if (!resp.ok) throw new Error(`API error ${resp.status}`);
-        const out: Result = await resp.json();
-        setResult(out);
-      } else {
-        // offline / demo
-        await new Promise((r) => setTimeout(r, 400));
-        setResult(mockScore(form));
-      }
-    } catch (e: any) {
-      setError(e?.message || "Failed to score");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function field(
-    label: string,
-    input: React.ReactNode
-  ) {
-    return (
-      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 8, alignItems: "center" }}>
-        <div style={{ fontSize: 13, color: "#555" }}>{label}</div>
-        <div>{input}</div>
-      </div>
-    );
-  }
-
-  const wrap: React.CSSProperties = { maxWidth: 1100, margin: "24px auto", padding: "0 16px" };
-  const card: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, background: "#fff" };
-  const heading: React.CSSProperties = { fontSize: 20, fontWeight: 600, marginBottom: 8 };
-
   return (
-    <div style={{ background: "#f7f7fb", minHeight: "100vh" }}>
-      <div style={wrap}>
-        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>SME Credit Risk Scoring</div>
-            <div style={{ fontSize: 12, color: "#666" }}>
-              End-user demo. Works offline (mock) or via your FastAPI at <code>/api/score</code>.
-            </div>
-          </div>
-        </header>
+    <div style={{ maxWidth: 640, margin: "24px auto", padding: 16 }}>
+      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}>SME Credit Risk — Score</h1>
+<div style={{ display:"flex", gap:8, marginBottom:12 }}>
+  <button
+    type="button"
+    onClick={async ()=>{
+      const u = prompt("Email","demo@user.test");
+      const p = prompt("Password","demo1234");
+      if(!u || !p) return;
+      try { await login(u,p); alert("Signed in"); }
+      catch { alert("Login failed"); }
+    }}
+    style={{ padding:"6px 10px", border:"1px solid #e5e7eb", borderRadius:8 }}
+  >
+    Sign in
+  </button>
 
-        <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1fr 1fr" }}>
-          {/* Left: Inputs */}
-          <div style={card}>
-            <div style={heading}>Borrower Inputs</div>
-            <div style={{ display: "grid", gap: 10 }}>
-              {field(
-                "Loan amount (AED)",
-                <input
-                  type="number"
-                  placeholder="200000"
-                  value={form.loan_amnt ?? ""}
-                  onChange={(e) => setForm({ ...form, loan_amnt: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-              {field(
-                "Interest rate (%)",
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="12.5"
-                  value={form.int_rate ?? ""}
-                  onChange={(e) => setForm({ ...form, int_rate: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-              {field(
-                "Debt-to-income (DTI, %)",
-                <input
-                  type="number"
-                  step="0.1"
-                  placeholder="18"
-                  value={form.dti ?? ""}
-                  onChange={(e) => setForm({ ...form, dti: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-              {field(
-                "Annual income (AED)",
-                <input
-                  type="number"
-                  placeholder="420000"
-                  value={form.annual_inc ?? ""}
-                  onChange={(e) => setForm({ ...form, annual_inc: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-              {field(
-                "Term",
-                <select
-                  value={String(form.term ?? 36)}
-                  onChange={(e) => setForm({ ...form, term: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                >
-                  <option value="36">36 months</option>
-                  <option value="60">60 months</option>
-                </select>
-              )}
-              {field(
-                "Grade (A best → G worst)",
-                <select
-                  value={form.grade ?? "B"}
-                  onChange={(e) => setForm({ ...form, grade: e.target.value as any })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                >
-                  {["A", "B", "C", "D", "E", "F", "G"].map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {field(
-                "Revolving utilization (%)",
-                <input
-                  type="number"
-                  step="0.1"
-                  placeholder="45"
-                  value={form.revol_util ?? ""}
-                  onChange={(e) => setForm({ ...form, revol_util: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-              {field(
-                "Delinquencies (2 yrs)",
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={form.delinq_2yrs ?? ""}
-                  onChange={(e) => setForm({ ...form, delinq_2yrs: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-              {field(
-                "Open accounts",
-                <input
-                  type="number"
-                  placeholder="6"
-                  value={form.open_acc ?? ""}
-                  onChange={(e) => setForm({ ...form, open_acc: Number(e.target.value) })}
-                  style={{ width: "100%", padding: 8, border: "1px solid #ddd", borderRadius: 8 }}
-                />
-              )}
-            </div>
+  <button
+    type="button"
+    onClick={async ()=>{
+      const sample = {
+        revenue:12000000, ebitda:1800000, dscr:1.8, leverage:2.5,
+        bank_limits:5000000, tenor_months:24, sector:"manufacturing",
+      };
+      const data = await score(sample, { demo:true }); // hits /demo/score (no token)
+      setResult(data);
+    }}
+    style={{ padding:"6px 10px", border:"1px solid #e5e7eb", borderRadius:8 }}
+  >
+    Quick demo
+  </button>
+</div>
 
-            <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-              <button
-                onClick={onScore}
-                disabled={loading}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: "#111827",
-                  color: "white",
-                  cursor: "pointer",
-                }}
-              >
-                {loading ? "Scoring..." : "Score application"}
-              </button>
-              <button
-                onClick={() => {
-                  setForm({ term: 36, grade: "B" });
-                  setResult(null);
-                  setError(null);
-                }}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Reset
-              </button>
-            </div>
-
-            {error && <div style={{ color: "#b91c1c", marginTop: 8, fontSize: 13 }}>{error}</div>}
-            <div style={{ fontSize: 11, color: "#666", marginTop: 8 }}>
-              Note: Demo uses a placeholder model. Point API_URL to your FastAPI for production.
-            </div>
-          </div>
-
-          {/* Right: Result */}
-          <div style={card}>
-            <div style={heading}>Risk Result & Explanation</div>
-            {!result && (
-              <div style={{ fontSize: 14, color: "#666" }}>
-                Enter inputs and click <strong>Score application</strong> to see PD, risk tier, drivers and pricing hint.
-              </div>
+      <form onSubmit={handleSubmit(onSubmit, (e)=>console.log("formErrors", e))}>
+        {field("revenue", "Revenue (AED)")}
+        {field("ebitda", "EBITDA (AED)")}
+        {field("dscr", "DSCR")}
+        {field("leverage", "Leverage (x)")}
+        {field("bank_limits", "Bank Limits Requested (AED)")}
+        {field("tenor_months", "Tenor (months)", "1")}
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ display: "block", fontWeight: 600 }}>Sector</label>
+          <select style={{ width:"100%", padding:8, border:"1px solid #e5e7eb", borderRadius:8 }} {...register("sector")}>
+            {["manufacturing","services","trading","construction","hospitality","logistics","agri"].map(s =>
+              <option key={s} value={s}>{s}</option>
             )}
-
-            {result && (
-              <div style={{ display: "grid", gap: 12 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontSize: 12, color: "#666" }}>Predicted Default Probability (PD)</div>
-                    <div style={{ fontSize: 28, fontWeight: 600 }}>{(result.pd * 100).toFixed(2)}%</div>
-                  </div>
-                  <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontSize: 12, color: "#666" }}>Risk Tier</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          width: 10,
-                          height: 10,
-                          borderRadius: "999px",
-                          background: risk?.color || "#ccc",
-                        }}
-                      />
-                      <span style={{ fontSize: 18, fontWeight: 500 }}>{risk?.label}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                    Top drivers (higher bar = stronger impact)
-                  </div>
-                  <div style={{ width: "100%", height: 260 }}>
-                    <ResponsiveContainer>
-                      <BarChart data={featureData} layout="vertical" margin={{ left: 16, right: 16 }}>
-                        <XAxis type="number" hide />
-                        <YAxis type="category" dataKey="name" width={180} />
-                        <Tooltip formatter={(v) => [v as number, "impact"]} />
-                        <Bar dataKey="value" radius={[4, 4, 4, 4]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                    Indicative pricing guidance (illustrative)
-                  </div>
-                  <PricingHint pd={result.pd} />
-                </div>
-
-                <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12, background: "#fafafa" }}>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Audit trail</div>
-                  <ul style={{ paddingLeft: 18, margin: 0, fontSize: 13 }}>
-                    <li>Inputs validated on client.</li>
-                    <li>Model version: <code>{result.model_version || "demo-0.1"}</code></li>
-                    <li>Timestamp: {new Date().toLocaleString()}</li>
-                  </ul>
-                </div>
-              </div>
-            )}
-          </div>
+          </select>
         </div>
 
-        <footer style={{ marginTop: 16, textAlign: "center", fontSize: 12, color: "#666" }}>
-          Built for bankers: explainable, fast, production-ready. Swap to API when ready.
-        </footer>
-      </div>
+        <div style={{ display:"flex", gap:8 }}>
+          <button type="submit" style={{ padding:"10px 16px", borderRadius:10, background:"#111827", color:"#fff" }}>
+            Score
+          </button>
+          <button type="button" onClick={trySample} style={{ padding:"10px 16px", borderRadius:10, border:"1px solid #e5e7eb", background:"#fff" }}>
+            Try with sample data
+          </button>
+        </div>
+      </form>
+
+      {result && <ResultsCard data={result} />}
     </div>
   );
 }
+
