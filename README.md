@@ -1,6 +1,12 @@
 # 🚀 SME Credit Risk — FastAPI + React (Single URL)
 
-Predict SME loan default (PD) with **LightGBM** and show top drivers — all in a **one-link app** where **FastAPI** serves the built **React (Vite)** UI.
+Predict SME loan default (PD) and show top drivers — with a simple web app.
+
+- Backend: FastAPI (/score, /demo/score, /auth/login)
+- Frontend: React + Vite (single-page wizard, Zod validation)
+- Auth: JWT (email/password). Demo path does not need auth
+- Safety: 5 req/min/IP rate limit, CORS locked to http://localhost:5173
+- Run modes: Dev (two servers) or Single-URL (serve built UI from FastAPI)
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/Node-20.19%2B%20or%2022.12%2B-brightgreen)](https://nodejs.org/)
@@ -9,202 +15,260 @@ Predict SME loan default (PD) with **LightGBM** and show top drivers — all in 
 [![CI](https://github.com/10-kp/SME-Credit-Risk-ML/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/10-kp/SME-Credit-Risk-ML/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-> 💡 **For beginners:** You don’t need MLOps experience. Follow the **Quick Start** below; it gets you from zero → running app in minutes.
+
+> 💡 Beginners: follow the Quick Start. No MLOps needed.
+
 
 ---
 
+
 ## 🧭 What is this?
 
-- **Goal:** Estimate **Probability of Default (PD)** for SME loans and **explain** the prediction.
-- **Model:** LightGBM (fast gradient-boosted trees).
-- **Explanations:** SHAP if available, otherwise LightGBM feature gains.
-- **App:** FastAPI backend + React (Vite) UI. **One URL** for users.
+- Goal: Estimate Probability of Default (PD) for SME loans and explain key drivers.
+- Model: (Rules/stub for Sprint-1). LightGBM/SHAP can be wired later.
+- App: FastAPI backend + React (Vite) UI.
+
 
 ### How the pieces fit
 
 ```
-mermaid
-flowchart LR
-  UI[React + Vite (frontend)] -->|POST /api/score| API[FastAPI]
-  API --> Model[LightGBM model.txt]
-  API --> Explain[SHAP / Feature Gain]
-  API -->|serves| Static[Built UI (api/static)]
+Frontend (Vite/React)  ->  POST /score (JWT)  ->  FastAPI
+                   \->  POST /demo/score (no auth)
+FastAPI -> scoring rules -> PD% + band + recommendations + top drivers
+
 ```
 
 ---
+
 
 📂 Repo layout
+
 ```
 api/
-  main.py            # FastAPI app (API + serves built UI)
+  app/
+    main.py      # FastAPI app (CORS, rate limits, JWT, routes)
+    auth.py      # JWT login (dev user), password hashing
+    scoring.py   # PD scoring + drivers + recommendations
+    rules.py     # risk bands + product templates
+    schemas.py   # Pydantic request/response models
+  static/        # optional: built frontend for Single-URL mode
   requirements.txt
-  models/
-    model.txt        # LightGBM model (committed for easy deploys)
-  static/            # place frontend build here (assets/ + index.html)
 frontend/
-  src/               # React app (Vite + TS)
+  src/           # React app (wizard form + results card)
   package.json
-.github/workflows/ci.yml   # installs API, builds UI on push
+
 ```
 
-⚡ Quick Start (Single URL on your laptop)
-
-Result: open http://127.0.0.1:8000 and you’ll see the UI.
-API docs live at http://127.0.0.1:8000/docs.
-
 ---
+⚡ Quick Start (Dev mode — live reload)
+
+Terminal A — Backend (Windows PowerShell).
 
 Windows (PowerShell)
 ```
-# 1) Backend env + deps
-cd api
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+cd C:\Users\DELL\SME-Credit-Risk-ML
+conda deactivate            # run until (base) disappears; harmless if not active
+.\api\.venv\Scripts\Activate.ps1
+$env:PYTHONPATH = "$PWD"
+.\api\.venv\Scripts\python.exe -m uvicorn api.app.main:app --reload --port 8000
 
-# 2) Build the UI and copy into api/static
-cd ..\frontend
-# ensure no dev override so UI uses same-origin:
-del .env.local 2>$null
+```
+Check:
+
+- Health: http://127.0.0.1:8000/healthz
+- Docs: http://127.0.0.1:8000/docs
+
+
+---
+
+Terminal B — Frontend
+
+```
+cd C:\Users\DELL\SME-Credit-Risk-ML\frontend
+npm install
+npm run dev
+
+```
+
+Open: http://localhost:5173
+
+Using the app
+
+Click Quick demo → calls /demo/score (no login)
+Click Sign in → Email demo@user.test, Password demo1234 → then Score uses protected /score
+
+---
+🔗 Single-URL mode (serve built UI from FastAPI)
+
+This builds the React app and serves it from the API at http://127.0.0.1:8000.
+
+Windows PowerShell
+
+```
+# build the UI
+cd C:\Users\DELL\SME-Credit-Risk-ML\frontend
+del .env.local 2>$null      # ensure no dev override
 npm install
 npm run build
+
+# copy into backend static/
 Copy-Item -Recurse -Force .\dist\* ..\api\static\
 
-# 3) Run the server
+# run API
 cd ..\api
 .\.venv\Scripts\Activate.ps1
-python -m uvicorn main:app --host 127.0.0.1 --port 8000
-```
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-Mac/Linux (bash/zsh)
-```
-# 1) Backend env + deps
-cd api
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# 2) Build the UI and copy into api/static
-cd ../frontend
-# ensure no dev override so UI uses same-origin:
-rm -f .env.local
-npm install
-npm run build
-cp -R dist/* ../api/static/
-
-# 3) Run the server
-cd ../api
-uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
 Open:
 
-UI → http://127.0.0.1:8000;
-
-API docs → http://127.0.0.1:8000/docs
-
+UI + API: http://127.0.0.1:8000
+Docs: http://127.0.0.1:8000/docs
 
 ---
-👩‍💻 Dev Mode (live reload)
 
-Use two terminals.
+Mac/Linux
 
-Terminal A — API
-```
-cd api
-.\.venv\Scripts\Activate.ps1
-python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-Terminal B — Frontend
 ```
 cd frontend
-# point UI to the local API during dev:
-echo VITE_API_URL=http://127.0.0.1:8000/api/score > .env.local
-npm install
-npm run dev
-# open http://localhost:5173
+rm -f .env.local
+npm install && npm run build
+cp -R dist/* ../api/static/
+
+cd ../api
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+
 ```
 
-
 ---
-🧪 Try a request (Swagger → POST /api/score)
+
+🔐 Auth, Endpoints & Payloads
+
+Dev credentials
+
+- Email: demo@user.test
+- Password: demo1234
+
+Endpoints
+
+- POST /auth/login → { "access_token": "..." } (JWT)
+- POST /score → requires Authorization: Bearer <token>
+- POST /demo/score → no auth
+- GET /healthz → { "ok": true }
+
+Request body (both /score and /demo/score):
+
 ```
 {
-  "loan_amnt": 200000,
-  "int_rate": 12.5,
-  "dti": 18,
-  "annual_inc": 420000,
-  "term": 36,
-  "grade": "B",
-  "revol_util": 45,
-  "delinq_2yrs": 0,
-  "open_acc": 6
+  "revenue": 12000000,
+  "ebitda": 1800000,
+  "dscr": 1.8,
+  "leverage": 2.5,
+  "bank_limits": 5000000,
+  "tenor_months": 24,
+  "sector": "manufacturing"
 }
+
 ```
 
-You’ll get:
+Response (example):
 ```
-{ "pd": 0.23, "feats": [ {"name":"int_rate","value":...}, ... ], "model_version":"real-lightgbm" }
+{
+  "pd_pct": 2.33,
+  "risk_band": "amber",
+  "recommendations": [
+    {"product":"LC","tenor_months":6,"limit":1750000.0},
+    {"product":"Guarantees","tenor_months":12,"limit":1750000.0},
+    {"product":"Invoice Discounting","tenor_months":3,"limit":1500000.0}
+  ],
+  "top_drivers": [
+    {"label":"DSCR","contribution":-0.53},
+    {"label":"Leverage","contribution":0.41},
+    {"label":"EBITDA margin","contribution":-0.05}
+  ],
+  "notes": "rules:v1"
+}
+
 ```
 
 
 ---
-☁️ Deploy (Render / Railway) — Single URL
+🧪 Quick API tests (PowerShell)
 
-Root directory: api
+Get a token:
+```
+$TOKEN = (Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/auth/login" `
+  -ContentType "application/x-www-form-urlencoded" `
+  -Body @{username="demo@user.test"; password="demo1234"}).access_token
 
-Build: pip install -r requirements.txt
+```
 
-Start: uvicorn main:app --host 0.0.0.0 --port $PORT
+Protected score:
 
-Because the React build is copied into api/static/ and model.txt is present in api/models/, one service serves both UI and API. Share that URL with users.
+```
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/score" `
+  -Headers @{ Authorization = "Bearer $TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"revenue":12000000,"ebitda":1800000,"dscr":1.8,"leverage":2.5,"bank_limits":5000000,"tenor_months":24,"sector":"manufacturing"}'
 
-🔐 Public repo? If the model is sensitive, remove it from git and download it at startup instead.
+```
+
+Demo score (no token):
+
+```
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/demo/score" `
+  -ContentType "application/json" `
+  -Body '{"revenue":12000000,"ebitda":1800000,"dscr":1.8,"leverage":2.5,"bank_limits":5000000,"tenor_months":24,"sector":"manufacturing"}'
+
+```
+
+---
+
+⚙️ Dev details
+
+- Validation: Zod on the frontend (numeric fields must not be empty)
+- CORS (dev): allow_origins=["http://localhost:5173"]
+- Rate limit: 5 requests/minute/IP (SlowAPI)
+- JWT secret: hardcoded for dev; move to env var for production
+- Password hashing: PBKDF2 (portable). bcrypt also works if pinned.
 
 
 ---
 
-🧰 For beginners: 60-second glossary
+🩺 Troubleshooting (fast)
 
-PD (Probability of Default): probability a borrower misses payments in a time window.
-LightGBM: fast tree-based ML model; great for tabular data.
-SHAP: method to explain “which features pushed the score up/down”.
-FastAPI: web framework to expose your model as a REST API.
-Vite/React: frontend that calls the API and renders results.
-CORS: browser safety rule; matters only if UI and API run on different domains.
+“Score” does nothing
+Open DevTools → Console. If you see formErrors, a numeric field is blank (becomes NaN). Fill it and try again.
 
+401 on /score
+You’re not signed in. Click Sign in (or use Quick demo which calls /demo/score).
+
+429 Too Many Requests
+You hit the rate limit (5/min). Wait ~60s or use /demo/score.
+
+CORS error from browser
+Ensure the backend has CORS middleware allowing http://localhost:5173, then restart Uvicorn.
+
+Conda vs venv conflicts
+Run backend with the project venv:
+
+```
+conda deactivate
+.\api\.venv\Scripts\Activate.ps1
+$env:PYTHONPATH = "$PWD"
+.\api\.venv\Scripts\python.exe -m uvicorn api.app.main:app --reload --port 8000
+
+```
 
 ---
 
-🩺 Health / Troubleshooting
+☁️ Deploy (single URL)
 
-Health: add this to api/main.py if needed:
-```
-@app.get("/health", include_in_schema=False)
-def health(): return {"ok": True}
-```
-
-PowerShell won’t activate venv:
-```
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-```
-
-- /docs won’t open: ensure Uvicorn is running and not closed.
-- Node warning: use Node 20.19+ or 22.12+.
-- Split hosting CORS: add your frontend origin in main.py’s CORS allow_origins.
-
-
----
-
-✅ CI
-
-On each push, CI installs API deps and builds the frontend.
-Status:
-
-[![CI](https://img.shields.io/github/actions/workflow/status/10-kp/SME-Credit-Risk-ML/ci.yml?branch=main&label=CI&logo=github)](https://github.com/10-kp/SME-Credit-Risk-ML/actions/workflows/ci.yml)
-
+- Root: api
+- Build: pip install -r requirements.txt
+- Start: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+- During deploy, copy frontend/dist/* → api/static/ so one service serves UI + API
 
 
 ---
@@ -212,9 +276,6 @@ Status:
 📜 License
 
 MIT — use freely, improve boldly ✨
-```
-If you want, I can also drop in **two small screenshots placeholders** section and a **“Deploy to Render”** paragraph with step-by-step clicks.
-```
 
 
 
